@@ -653,7 +653,10 @@ impl Composer {
                     defs: shader_defs.clone(),
                 },
             })?;
-        module_string.push_str(&composed_header);
+
+        // Preprocess to work around naga's >> tokenization bug in binding_array types
+        let preprocessed_header = Self::preprocess_binding_array(&composed_header);
+        module_string.push_str(&preprocessed_header);
 
         let start_offset = module_string.len();
 
@@ -707,6 +710,16 @@ impl Composer {
         })
     }
 
+    // Workaround for naga's >> tokenization bug in nested generic types
+    // See: https://github.com/gfx-rs/wgpu/issues/5765
+    // This function adds a space before >> in binding_array type declarations
+    // to prevent parse errors when the generated WGSL is re-parsed
+    fn preprocess_binding_array(source: &str) -> String {
+        use regex::Regex;
+        let re = Regex::new(r"binding_array<([^<>]*<[^<>]*?)>>").unwrap();
+        re.replace_all(source, "binding_array<$1> >").to_string()
+    }
+
     // check that identifiers exported by a module do not get modified in string export
     fn validate_identifiers(
         source_ir: &naga::Module,
@@ -721,8 +734,11 @@ impl Composer {
             return Ok(());
         }
 
+        // Preprocess to work around naga's >> tokenization bug in binding_array types
+        let preprocessed_header = Self::preprocess_binding_array(header);
+
         let recompiled = match lang {
-            ShaderLanguage::Wgsl => naga::front::wgsl::parse_str(header).unwrap(),
+            ShaderLanguage::Wgsl => naga::front::wgsl::parse_str(&preprocessed_header).unwrap(),
             #[cfg(feature = "glsl")]
             ShaderLanguage::Glsl => naga::front::glsl::Frontend::default()
                 .parse(
